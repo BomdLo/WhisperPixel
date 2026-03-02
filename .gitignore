@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Build artifacts
+build/
+dist/
+dist_*/
+*.spec
+*.app/
+*.zip
+icon.iconset/
+
+# Temporary test outputs
+auto_*/
+autoscale_demo*/
+autoscale_demo2*/
+stream_test_*/
+stream_test_stego.png
+recovered*/
+demo_input/
+cover.png
+tiny_cover.png
+stego*.png
+auto_stego*.png
+
+# Local scripts
+launch_gui.applescript
