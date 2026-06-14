@@ -16,7 +16,6 @@ import hmac
 import math
 import os
 import struct
-import subprocess
 import sys
 import tempfile
 import zipfile
@@ -24,6 +23,8 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional, Tuple
 
 from PIL import Image
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 MAGIC = b"STEG1"
 VERSION = 1
@@ -66,30 +67,46 @@ def _iter_bits_from_chunks(chunks: Iterable[bytes]) -> Iterator[int]:
                 yield (byte >> shift) & 1
 
 
-def _run_openssl_enc(in_path: Path, out_path: Path, enc_key: bytes, iv: bytes, decrypt: bool) -> None:
-    cmd = [
-        "openssl",
-        "enc",
-        "-aes-256-cbc",
-        "-K",
-        enc_key.hex(),
-        "-iv",
-        iv.hex(),
-        "-nosalt",
-        "-in",
-        str(in_path),
-        "-out",
-        str(out_path),
-    ]
-    if decrypt:
-        cmd.insert(2, "-d")
+def _encrypt_file_cbc(in_path: Path, out_path: Path, enc_key: bytes, iv: bytes) -> None:
+    cipher = Cipher(algorithms.AES(enc_key), modes.CBC(iv))
+    encryptor = cipher.encryptor()
+    padder = padding.PKCS7(algorithms.AES.block_size).padder()
 
-    proc = subprocess.run(cmd, capture_output=True, check=False)
-    if proc.returncode != 0:
-        if decrypt:
-            raise StegError("Decrypt failed: password incorrect or payload corrupted")
-        stderr = proc.stderr.decode("utf-8", "ignore").strip()
-        raise StegError(f"OpenSSL encrypt failed: {stderr}")
+    with in_path.open("rb") as src, out_path.open("wb") as dst:
+        while True:
+            chunk = src.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            padded = padder.update(chunk)
+            if padded:
+                dst.write(encryptor.update(padded))
+
+        final_padded = padder.finalize()
+        if final_padded:
+            dst.write(encryptor.update(final_padded))
+        dst.write(encryptor.finalize())
+
+
+def _decrypt_file_cbc(in_path: Path, out_path: Path, enc_key: bytes, iv: bytes) -> None:
+    cipher = Cipher(algorithms.AES(enc_key), modes.CBC(iv))
+    decryptor = cipher.decryptor()
+    unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+
+    try:
+        with in_path.open("rb") as src, out_path.open("wb") as dst:
+            while True:
+                chunk = src.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                plaintext = unpadder.update(decryptor.update(chunk))
+                if plaintext:
+                    dst.write(plaintext)
+
+            final_plaintext = unpadder.update(decryptor.finalize()) + unpadder.finalize()
+            if final_plaintext:
+                dst.write(final_plaintext)
+    except ValueError as exc:
+        raise StegError("Decrypt failed: password incorrect or payload corrupted") from exc
 
 
 def _hmac_for_iv_and_file(iv: bytes, path: Path, mac_key: bytes) -> bytes:
@@ -110,7 +127,7 @@ def _encrypt_file_to_blob(input_file: Path, blob_file: Path, password: str) -> i
     with tempfile.TemporaryDirectory(prefix="steg_enc_") as tmp:
         tmp_dir = Path(tmp)
         cipher_file = tmp_dir / "cipher.bin"
-        _run_openssl_enc(input_file, cipher_file, enc_key, iv, decrypt=False)
+        _encrypt_file_cbc(input_file, cipher_file, enc_key, iv)
         tag = _hmac_for_iv_and_file(iv, cipher_file, mac_key)
 
         with blob_file.open("wb") as out:
@@ -157,7 +174,7 @@ def _decrypt_blob_to_file(blob_file: Path, output_file: Path, password: str) -> 
             if not hmac.compare_digest(tag, digest.digest()):
                 raise StegError("Decrypt failed: password incorrect or payload corrupted")
 
-            _run_openssl_enc(cipher_file, output_file, enc_key, iv, decrypt=True)
+            _decrypt_file_cbc(cipher_file, output_file, enc_key, iv)
 
 
 def encrypt_bytes(data: bytes, password: str) -> bytes:

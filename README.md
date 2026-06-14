@@ -61,6 +61,7 @@ GUI 功能：
 本機是 macOS，無法直接交叉編譯 Windows `.exe`。已提供 GitHub Actions 自動打包流程：
 - workflow: `.github/workflows/build-windows.yml`
 - 產出：`StegSecureWin.zip`（內含 `StegSecureWin.exe`）
+- Windows 版使用內建 Python 加密套件，不需要另外安裝 OpenSSL。
 
 使用方式：
 1. 專案 push 到 GitHub（建議分支 `main`）。
